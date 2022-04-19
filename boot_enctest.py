@@ -23,35 +23,62 @@ display.show()
 
 """
 Set up rotary encoder
-encoder button on pin 25
-set up ISR on encoder button
-get proper version of rotary_irq based on platform
+  encoder button on pin 5
+  set up listener on encoder button
 """
-knob_btn = Pin(25, Pin.IN, Pin.PULL_UP)
+knob_btn = Pin(5, Pin.IN, Pin.PULL_UP)
 knob_btn_pushed = False
 knob_prev = 0
-knob_dir = "--"
+knob_val = 0
+knob_dir = "."
 knob_change = False
 
-"""
-button pushed
-"""
 def knob_btn_isr(pin):
+    """
+    button push ISR flags a button push
+    """
     global knob_btn_pushed
     knob_btn_pushed = True
 
 """
-push only, not release
+  attach ISR. Push only, not release
 """
-knob_btn.irq(trigger=Pin.IRQ_FALLING, 
-               handler=knob_btn_isr)
+knob_btn.irq(trigger=Pin.IRQ_FALLING, handler=knob_btn_isr)
 
-knob = RotaryIRQ(pin_num_clk=26,
-                 pin_num_dt=27,
+def knob_listener():
+    """
+    Sets direction indicator and flags a change in value
+      scheduled by knob.process_rotary_pins
+    """
+    global knob_prev, knob_val, knob_dir, knob_change
+    
+    knob_val = knob.value()
+    knob_dir = "."     # Static, default
+    
+    if knob_val > knob_prev:
+        knob_dir = "+" # CW
+
+    if knob_val < knob_prev:
+        knob_dir = "-" # CCW
+
+    knob_prev = knob_val
+    knob_change = True
+
+"""
+define the knob
+  pull_up=True required when no external pullup in circuit
+  add a listener function to capture knob change and direction
+"""
+knob = RotaryIRQ(pin_num_clk=17,
+                 pin_num_dt=16,
                  min_val=0,
-                 max_val=10,
+                 max_val=100,
                  reverse=False,
-                 range_mode=RotaryIRQ.RANGE_BOUNDED)
+                 range_mode=RotaryIRQ.RANGE_BOUNDED,
+                 pull_up=True,
+                 half_step=False)
+
+knob.add_listener(knob_listener)
 
 """
 set up a timer for oled refresh

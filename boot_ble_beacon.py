@@ -20,7 +20,16 @@ def reboot():
 
 # set up BLE object. Needs to be unique per beacon.
 #  To do: make hardware definable (i.e specific pins set to HI/LO)
-ble = BLE('key_can_one')
+beacon_key = "67D7A2D5"
+# beacon_id = "0000#CCCC" # Home
+# beacon_id = "A08D#6CDD" # Substation
+# beacon_id = "CB69#A409" # 1 EP Clark Elementary
+# beacon_id = "D694#734A" # 2 Upton Middle School
+# beacon_id = "B2A5#55BD" # 3 Lakeshore High School
+# beacon_id = "60C3#6748" # 4 Lake Michigan College
+# beacon_id = "5DC3#154D" # 5 Lincoln Twp Library
+
+ble = BLE(beacon_key + beacon_id)
 
 # set up leds
 led=Pin(2,Pin.OUT)
@@ -56,7 +65,7 @@ def stop_flashing(t):
     timerF.deinit()
     flasher(0)
     ble.send('not lit')
-    
+
 print('ready.')
 flasher(1)
 sleep_ms(500)
@@ -77,14 +86,14 @@ while True:
         # flash the beacon
         timerF.init(period=200, mode=Timer.PERIODIC, callback=lambda t: flasher(not flasher.value()))
         # ... for 5 minutes: 300000. 5000 (5 sec. for testing)
-        timerX.init(period=5000, mode=Timer.ONE_SHOT, callback=stop_flashing)
+        timerX.init(period=300000, mode=Timer.ONE_SHOT, callback=stop_flashing)
         ble.send('lit up!')
-    
+
     # < debugging and monitoring stuff
     elif ble.event_msg == 'foo':
         print('init event message')
         ble.event_msg = 'bar'
-        
+
     elif ble.event_msg == 'bar':
         pass
 

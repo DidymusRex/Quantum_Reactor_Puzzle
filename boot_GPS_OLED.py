@@ -1,5 +1,5 @@
 from adafruitGFX import GFX
-from machine import disable_irq, enable_irq, SoftI2C, Pin, reset, Timer, UART
+from machine import disable_irq, enable_irq, I2C, Pin, reset, Timer, UART
 from math import atan2, degrees, ceil, cos, floor, pi, radians, sin, sqrt
 from micropyGPS import MicropyGPS
 
@@ -8,17 +8,11 @@ import sys
 import time
 
 """
-simple function to reboot in REPL
-"""
-def reboot():
-    reset()
-    
-"""
 Set up OLED on I2C
   use default address 0x3C
   I2C 0 is scl 18 and sda 19
 """
-i2c = SoftI2C(scl=Pin(27), sda=Pin(26), freq=100000)
+i2c = I2C(0)
 display = ssd1306.SSD1306_I2C(128, 64, i2c)
 gfx = GFX(128, 64, display.pixel, display.hline, display.vline)
 
@@ -30,8 +24,8 @@ Set up the GPS receiver on UART 1
   set up the gps parser
 """
 uart = UART(1,
-            rx=35,
-            tx=32,
+            rx=21,
+            tx=22,
             baudrate=9600,
             bits=8,
             parity=None,
@@ -66,6 +60,7 @@ def update_gps_info():
 
     return retval
 
+
 def calc_distance(lat1, lon1, lat2, lon2):
     #radius of Earth in metres
     R = 6371000
@@ -81,6 +76,7 @@ def calc_distance(lat1, lon1, lat2, lon2):
     c = 2 * atan2(sqrt(a), sqrt(1-a))
     return R * c
 
+
 def calc_bearing(lat1, lon1, lat2, lon2):
     #convert lat/lon to radians
     lat1r = radians(lat1)
@@ -91,6 +87,7 @@ def calc_bearing(lat1, lon1, lat2, lon2):
     a = cos(lat2r) * sin(deltaLon)
     b = cos(lat1r) * sin(lat2r) - sin(lat1r) * cos(lat2r) * cos(deltaLon)
     return (degrees(atan2(a,b)) + 360) % 360
+
 
 def display_bearing(cx, cy, radius, angleR):
     global gfx
@@ -108,6 +105,7 @@ def display_bearing(cx, cy, radius, angleR):
     gfx.circle(cx, cy, radius, 1)
     display.line(cx, cy, rx, ry, 1)
     display.show()
+
 
 def update_oled(s):
     """

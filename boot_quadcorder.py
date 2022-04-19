@@ -8,6 +8,7 @@ import needed modules
 """
 from adafruitGFX import GFX
 from basic_ble import *
+from KeyPad import KeyPad
 from machine import disable_irq, enable_irq, I2C, Pin, reset, Timer, UART
 from math import atan2, degrees, ceil, cos, floor, pi, radians, sin, sqrt
 from micropyGPS import MicropyGPS
@@ -17,16 +18,38 @@ import sys
 import time
 import ubluetooth
 
-"""
-simple function to reboot in REPL
-"""
-def reboot():
-    reset()
-    
+# Device Pin numbers
+OLED_SCL=18
+OLED_SDA=19
+KNOB_BTN=5
+KNOB_CLK=17
+KNOB_DAT=16
+UART_RX=21
+UART_TX=22
+KP_R1=13
+KP_R2=12
+KP_R3=14
+KP_R4=27
+KP_C1=26
+KP_C2=25
+KP_C3=33
+KP_C4=32
+
+# GPS Targets
+targets = {"0000#CCCC": (42.040545, -86.435835), # Home
+           "A08D#6CDD": (42.039323, -86.435976), # Substation
+           "CB69#A409": (42.044174, -86.446875), # EP Clark Elementary
+           "D694#734A": (42.048659, -86.473342), # Upton Middle School
+           "B2A5#55BD": (42.013209, -86.492442), # Lakeshore High School
+           "60C3#6748": (42.094203, -86.391581), # Lake Michigan College
+           "5DC3#154D": (42.015690, -86.504157)  # Lincoln Twp Library
+}
+beacon_key = b'67D7A2D5'
+
 """
 Set up OLED on I2C
-  use default address 0x3C
-  I2C 0 is scl 18 and sda 19
+  uses default address 0x3C
+  I2C 0 uses scl 18 and sda 19 by default
 """
 i2c = I2C(0) 
 display = ssd1306.SSD1306_I2C(128, 64, i2c)
@@ -37,10 +60,10 @@ display.show()
 
 """
 Set up rotary encoder
-  encoder button on pin 25
+  encoder button on pin 5
   set up listener on encoder button
 """
-knob_btn = Pin(25, Pin.IN, Pin.PULL_UP)
+knob_btn = Pin(KNOB_BTN, Pin.IN, Pin.PULL_UP)
 knob_btn_pushed = False
 knob_prev = 0
 knob_val = 0
@@ -49,7 +72,7 @@ knob_change = False
 
 def knob_btn_isr(pin):
     """
-    button push ISR flags a button push
+    ISR flags a button push
     """
     global knob_btn_pushed
     knob_btn_pushed = True
@@ -83,10 +106,10 @@ define the knob
   pull_up=True required when no external pullup in circuit
   add a listener function to capture knob change and direction
 """
-knob = RotaryIRQ(pin_num_clk=27,
-                 pin_num_dt=26,
+knob = RotaryIRQ(pin_num_clk=KNOB_CLK,
+                 pin_num_dt=KNOB_DAT,
                  min_val=0,
-                 max_val=100,
+                 max_val=10,
                  reverse=False,
                  range_mode=RotaryIRQ.RANGE_BOUNDED,
                  pull_up=True,
@@ -99,8 +122,8 @@ Set up the GPS receiver on UART 1
   set up the gps parser
 """
 uart = UART(1,
-            rx=35,
-            tx=32,
+            rx=UART_RX,
+            tx=UART_TX,
             baudrate=9600,
             bits=8,
             parity=None,
@@ -110,6 +133,13 @@ uart = UART(1,
 
 gps_message = ""
 gps = MicropyGPS()
+
+"""
+Set up the keypad
+"""
+kp = KeyPad(KP_R1, KP_R2, KP_R3, KP_R4, 
+            KP_C1, KP_C2, KP_C3, KP_C4, 
+            timer_period=50)
 
 """
 Set up a bluetooth object and UUIDs for Nordic UART service
@@ -169,6 +199,9 @@ def update_gps_info():
     return retval
 
 def calc_distance(lat1, lon1, lat2, lon2):
+    if lat1 == 0 or lon1 == 0 or lat2 == 0 or lon2 == 0:
+        return -1
+
     #radius of Earth in metres
     R = 6371000
 
@@ -179,11 +212,14 @@ def calc_distance(lat1, lon1, lat2, lon2):
     deltaLon = radians(lon2-lon1)
 
     #haversine formula
-    a = sin(deltaLat/2) * sin(deltaLat/2) + cos(lat1r) * cos(lat2r) * sin(deltaLon/2) * sin(deltaLon/2)
+    a = (sin(deltaLat/2) * sin(deltaLat/2)) + (cos(lat1r) * cos(lat2r) * (sin(deltaLon/2) * sin(deltaLon/2)))
     c = 2 * atan2(sqrt(a), sqrt(1-a))
     return R * c
 
 def calc_bearing(lat1, lon1, lat2, lon2):
+    if lat1 == 0 or lon1 == 0 or lat2 == 0 or lon2 == 0:
+        return -1
+
     #convert lat/lon to radians
     lat1r = radians(lat1)
     lat2r = radians(lat2)
@@ -196,71 +232,157 @@ def calc_bearing(lat1, lon1, lat2, lon2):
 
 def display_bearing(cx, cy, radius, angleR):
     global gfx
-    display.fill(0)
 
     display.text('N', cx-4, 0, 1)
-    l = len(str(degrees(angleR)))*4
-    display.text(str(degrees(angleR)), cx - l, 50, 1)
-
-    #move from x to y axis
-    angleR = angleR - radians(90)
-    rx = cx + ceil(radius * cos(angleR))
-    ry = cy + ceil(radius * sin(angleR))
-
     gfx.circle(cx, cy, radius, 1)
-    display.line(cx, cy, rx, ry, 1)
+    
+    if angleR < 0:
+        display.text("No", cx-8, cy-8)
+        display.text("GPS", cx-12, cy+8)
+    else:
+        #move from x to y axis
+        angleR = angleR - radians(90)
+        rx = cx - ceil(radius * cos(angleR))
+        ry = cy - ceil(radius * sin(angleR))
+
+        display.line(cx, cy, rx, ry, 1)
+
     display.show()
 
 def update_oled(s):
     """
     Get new data from GPS module and format it on the oled display
     """
-    global knob_dir
+    global tgt_found, tgt_code, tgt_lat, tgt_lon
 
     display.fill(0)
 
-    # Line 1 BLE info
-    display.text("BLE", 0, 0, 1)
-    display.text(ble.scan_indicator[ble.scan_count%4], 64, 0)
-    display.text(str(ble.scan_count), 80, 0)
-    
-    if ble.connect_status == True:
-        display.fill_rect(32, 1, 6, 6, 1)
+    if tgt_found:
+        display.text("*BLINKING*", 0, 0, 1)
     else:
-        display.rect(32, 1, 6, 6, 1)
+        if ble.scanning == True:
+            display.text("Scan for", 0, 0, 1)
+        else:
+            display.text("Scan OFF", 0, 0, 1)
 
-    if ble.scanning == True:
-        display.fill_rect(48, 1, 6, 6, 1)
-    else:
-        display.rect(48, 1, 6, 6, 1)
-
-    # Lines 2-4 GPS info
+    gps.coord_format = "dd"
     if update_gps_info():
-        display.text("Lat ", 0, 10)
-        display.text(str(gps.latitude[2]), 32, 10)
-        display.text(str(gps.latitude[0]), 48, 10)
-        display.text(str(gps.latitude[1]), 72, 10)
-        
-        display.text("Lon ", 0, 20)
-        display.text(str(gps.longitude[2]), 32, 20)
-        display.text(str(gps.longitude[0]), 48, 20)
-        display.text(str(gps.longitude[1]), 72, 20)
+        gps.coord_format = "dd"
+        my_lat=gps.latitude[0]
+        if gps.latitude[1] == "S":
+            my_lat = my_lat * -1
+        my_lon=gps.longitude[0]
+        if gps.longitude[1] == "W":
+            my_lon = my_lon * -1
 
-        display.text("Sat " + str(gps.satellites_in_use), 0, 30)
+    if tgt_code > "":
+        display.text(tgt_code, 0, 10, 1)
+
+        display.text("^" + str(tgt_lat), 0, 20)
+        display.text(">" + str(tgt_lon), 0, 30)
     else:
-        display.text("Lat ---", 0, 10)
-        display.text("Lon ---", 0, 20)
-        display.text("Sat ---", 0, 30)
+        display.text("   No", 0, 10, 1)
+        display.text(" Target", 0, 20)
+        display.text("Selected", 0, 30)
 
-
-    # Line 5 update event
-    display.text(s, 0, 50)
+    b = calc_bearing(my_lat, my_lon, tgt_lat, tgt_lon)
+    display_bearing(106, 30, 20, b)
+    
+    d = calc_distance(my_lat, my_lon, tgt_lat, tgt_lon)
+    display.text("dist (km)", 0, 40, 1)
+    if d>0:
+        display.text(str(d/1000), 0, 50, 1)
+    else:
+        display.text("--.----", 0, 50, 1)
+    
     display.show()
 
-"""
-main loop
-"""
-update_oled("main")
+def qc_menu(menu_items):
+    global knob_dir, knob_change, knob_btn_pushed
+
+    curr_item = 0
+    prev_item = 1
+    display.fill(0)
+    display.show()
+
+    while True:
+        if knob_btn_pushed:
+            knob_btn_pushed = False
+            break
+
+        if knob_change:
+            knob_change = False
+            if knob_dir == "+":
+                curr_item = curr_item + 1
+                if curr_item > len(menu_items):
+                    curr_item = len(menu_items)
+            else:
+                curr_item = curr_item - 1
+                if curr_item < 0:
+                    curr_item = 0
+
+        if curr_item != prev_item:
+            prev_item = curr_item
+            display.fill(0)
+
+            for menu_item in menu_items:
+                i = menu_items.index(menu_item)
+                if i == curr_item:
+                    gfx.fill_rect(0, curr_item*10, 128, 10, 1)
+                    display.text(menu_item, 0, i*10, 0)
+                else:
+                    display.text(menu_item, 0, i*10, 1)
+
+            display.show()
+                
+    return(curr_item)
+
+def qc_enter_code():
+    global knob_change, knob_dir, knob_btn_pushed
+    c=0
+    t=""
+    
+    display.fill(0)
+    display.text("Enter Code:", 0, 0, 1)
+    gfx.fill_rect(len(t)*8, 20, 8, 8, 1)
+    display.show()
+    
+    while True:
+        if knob_btn_pushed:
+            debounce_pin(knob_btn)
+            knob_btn_pushed = False
+            break
+
+        if kp.get_btn() >= 0:
+            c=c+1
+            t=t+kp.btn_chr
+            gfx.fill_rect(0, 20, 128, 10, 0)
+            display.text(t, 0, 20, 1)
+            gfx.fill_rect(c*8, 20, 8, 8, 1)
+            display.show()
+            
+        if c>8:
+            break
+
+    return(t)
+
+#-------------------------------------------------------------------------------
+display.fill(0)
+display.text("Quadcorder v1.00",0 ,0, 1)
+display.text("  press knob to ", 0, 20, 1)
+display.text("   initialize   ", 0, 30, 1)
+display.show()
+
+while True:
+    if knob_btn_pushed:
+        debounce_pin(knob_btn)
+        knob_btn_pushed = False
+        break
+
+tgt_found=False
+tgt_code=""
+tgt_lat=0
+tgt_lon=0
 
 while True:
     """
@@ -272,12 +394,30 @@ while True:
         knob_btn_pushed = False
 
         """ do whatever """
-        if ble.scanning:
-            ble.stop_scan()
-        else:
-            ble.scan()
+        tgt_code = qc_enter_code()
 
-        update_oled("button")
+        if tgt_code in targets.keys():
+            tgt_lat = targets[tgt_code][0]
+            tgt_lon = targets[tgt_code][1]
+            tgt_found = False
+            ble.scan()
+            update_oled("button")
+        else:
+            tgt_lat = 0
+            tgt_lon = 0
+            display.fill(0)
+            display.text("Invalid Code", 5*4, 20, 1)
+            display.text(tgt_code, int(16-(len(tgt_code))/2)*4, 30, 1)
+            display.show()
+            tgt_found = False
+            ble.stop_scan()
+            tgt_code=""
+
+            while True:
+                if knob_btn_pushed:
+                    debounce_pin(knob_btn)
+                    knob_btn_pushed = False
+                    break
 
     """
     timer interrupt was triggered
@@ -307,13 +447,14 @@ while True:
         if ble.event_id == ble.IRQ_SCAN_RESULT:
             addr_type, addr, adv_type, rssi, adv_data = ble.scan_result
             ble.scan_count += 1
-            update_oled('scan')
 
             """
             advertising data contains the name of the device
             """
-            if b'key_can' in adv_data:
-                print('found a key can, connecting')
+            if beacon_key in adv_data:
+                print('found a beacon, connecting')
+                print(adv_data)
+                tgt_found = True
                 ble.connect(addr_type, addr)
 
         if ble.event_id == ble.IRQ_SCAN_DONE:
